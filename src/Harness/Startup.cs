@@ -6,6 +6,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using System;
+using System.Linq;
+using System.Security.Claims;
 
 namespace Harness
 {
@@ -20,6 +23,8 @@ namespace Harness
 
         public void ConfigureServices(IServiceCollection services)
         {
+            // first registration wins
+            services.TryAddSingleton<ISchema, MySchema>();
             services.TryAddSingleton<ISchema>(s =>
             {
                 var definitions = @"
@@ -53,7 +58,13 @@ namespace Harness
             {
                 options.ExposeExceptions = true;
                 options.EnableMetrics = false;
-            }).AddUserContextBuilder(context => new GraphQLUserContext { User = context.User });
+            }).AddUserContextBuilder(context =>
+            {
+                var c = new GraphQLUserContext { User = context.User };
+                // just for example override user with test value claims
+                c.User = new ClaimsPrincipal(new ClaimsIdentity[] { new ClaimsIdentity(new Claim[] { new Claim("a", "1"), new Claim("b", "2") }, "blabla") }); 
+                return c;
+            });
         }
 
         public void Configure(IApplicationBuilder app, IHostingEnvironment env)
@@ -61,6 +72,26 @@ namespace Harness
             app.UseDeveloperExceptionPage()
                .UseGraphQL<ISchema>()
                .UseGraphiQLServer();
+        }
+    }
+
+    public class MySchema : Schema
+    {
+        public MySchema(IServiceProvider p) : base(p)
+        {
+            Query = new MyQuery();
+        }
+    }
+
+    public class MyQuery : ObjectGraphType
+    {
+        public MyQuery()
+        {
+            Field<StringGraphType>("test", resolve: context =>
+                {
+                    var provider = (IProvideClaimsPrincipal)context.UserContext;
+                    return string.Join(", ", provider.User.Claims.Select(c => $"{c.Type}={c.Value}"));
+                });
         }
     }
 }
